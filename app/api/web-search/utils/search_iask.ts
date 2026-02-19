@@ -4,7 +4,7 @@ import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
 import * as tough from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
-import { getRandomUserAgent } from '@/app/api/test-mcp/utils/user_agents';
+import { getRandomUserAgent } from '@/app/api/web-search/utils/user_agents';
 
 const { CookieJar } = tough;
 

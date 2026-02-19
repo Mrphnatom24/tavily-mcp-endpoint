@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
-import { getRandomUserAgent } from '@/app/api/test-mcp/utils/user_agents';
+import { getRandomUserAgent } from '@/app/api/web-search/utils/user_agents';
 
 class MonicaClient {
   private apiEndpoint: string;

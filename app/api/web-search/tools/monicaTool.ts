@@ -1,4 +1,4 @@
-import { searchMonica } from  '@/app/api/test-mcp/utils/search_monica';
+import { searchMonica } from '@/app/api/web-search/utils/search_monica';
 import { z } from "zod";
 
 // InputSchema - Parámetros que recibe
@@ -22,10 +22,9 @@ export const monicaToolDefinition = {
 
 /**
  * Monica AI search tool handler
- * @param {any} params - The tool parameters
- * @returns {Promise<any>} - The tool result
+ * @param {z.infer<typeof MonicaToolSchema>} params - The tool parameters
  */
-export async function monicaToolHandler(params: any) {
+export async function monicaToolHandler(params: z.infer<typeof MonicaToolSchema>) {
   const { query } = params;
 
   console.log(`Searching Monica AI for: "${query}"`);
@@ -35,7 +34,7 @@ export async function monicaToolHandler(params: any) {
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: result || 'No results found.'
         }
       ]
@@ -46,7 +45,7 @@ export async function monicaToolHandler(params: any) {
       isError: true,
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `Error searching Monica: ${error.message}`
         }
       ]

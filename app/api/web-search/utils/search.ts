@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import https from 'https';
-import { getRandomUserAgent } from '@/app/api/test-mcp/utils/user_agents';
+import { getRandomUserAgent } from '@/app/api/web-search/utils/user_agents';
 
 // Constants
 const MAX_CACHE_PAGES = 5;
@@ -13,11 +13,9 @@ const resultsCache = new Map();
 
 // HTTPS agent configuration to handle certificate chain issues
 const httpsAgent = new https.Agent({
-  rejectUnauthorized: true, // Keep security enabled
-  keepAlive: true,
+  rejectUnauthorized: true,
+  keepAlive: false, // Deshabilitado para evitar sockets zombies en App Router
   timeout: REQUEST_TIMEOUT,
-  // Provide fallback for certificate issues while maintaining security
-  secureProtocol: 'TLSv1_2_method'
 });
 
 /**
@@ -184,6 +182,7 @@ async function searchDuckDuckGo(query: string, numResults: number = 10, mode: st
         throw new Error(`HTTP ${response.status}: Failed to fetch search results`);
       }
 
+      console.log(`DuckDuckGo responded with status ${response.status}. Parsing HTML...`);
       const html = response.data;
 
       // Parse results using cheerio
@@ -260,12 +259,18 @@ async function searchDuckDuckGo(query: string, numResults: number = 10, mode: st
       });
 
       // Wait for all Jina AI fetches to complete with timeout
-      const jinaResults = await Promise.race([
-        Promise.all(jinaFetchPromises),
-        new Promise<any[]>((_, reject) =>
-          setTimeout(() => reject(new Error('Content fetch timeout')), 15000)
-        )
-      ]) as any[];
+      let jinaResults: any[] = [];
+      if (jinaFetchPromises.length > 0) {
+        console.log(`Fetching content for ${jinaFetchPromises.length} results...`);
+        jinaResults = await Promise.race([
+          Promise.all(jinaFetchPromises),
+          new Promise<any[]>((_, reject) =>
+            setTimeout(() => reject(new Error('Content fetch timeout')), 15000)
+          )
+        ]) as any[];
+      } else {
+        console.log('No results found in DuckDuckGo HTML to fetch content for.');
+      }
 
       results.push(...jinaResults);
 

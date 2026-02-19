@@ -1,4 +1,4 @@
-import { searchDuckDuckGo } from '@/app/api/test-mcp/utils/search';
+import { searchDuckDuckGo } from '@/app/api/web-search/utils/search';
 import { z } from "zod";
 
 // InputSchema - Parámetros que recibe
@@ -28,10 +28,10 @@ export const searchToolDefinition = {
 
 /**
  * Web search tool handler
- * @param {any} params - The tool parameters
- * @returns {Promise<any>} - The tool result
+ * @param {z.infer<typeof SearchToolSchema>} params - The tool parameters
+ * @returns {Promise<Object>} - The tool response
  */
-export async function searchToolHandler(params: any) {
+export async function searchToolHandler(params: z.infer<typeof SearchToolSchema>) {
   const { query, numResults = 3, mode = 'short' } = params;
   console.log(`Searching for: ${query} (${numResults} results, mode: ${mode})`);
 
@@ -65,7 +65,7 @@ export async function searchToolHandler(params: any) {
   return {
     content: [
       {
-        type: 'text',
+        type: 'text' as const,
         text: formattedResults || 'No results found.'
       }
     ]

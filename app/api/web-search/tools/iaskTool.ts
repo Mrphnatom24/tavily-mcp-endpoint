@@ -1,4 +1,4 @@
-import { searchIAsk, VALID_MODES, VALID_DETAIL_LEVELS } from '@/app/api/test-mcp/utils/search_iask';
+import { searchIAsk, VALID_MODES, VALID_DETAIL_LEVELS } from '@/app/api/web-search/utils/search_iask';
 import { z } from "zod";
 
 
@@ -31,25 +31,24 @@ export const iaskToolDefinition = {
 
 /**
  * IAsk AI search tool handler
- * @param {any} params - The tool parameters
- * @returns {Promise<any>} - The tool result
+ * @param {z.infer<typeof IAskToolSchema>} params - The tool parameters
  */
-export async function iaskToolHandler(params: any) {
+export async function iaskToolHandler(params: z.infer<typeof IAskToolSchema>) {
   const {
     query,
     mode = 'thinking',
-    detailLevel = null
+    detailLevel = undefined
   } = params;
 
   console.log(`Searching IAsk AI for: "${query}" (mode: ${mode}, detailLevel: ${detailLevel || 'default'})`);
 
   try {
-    const response = await searchIAsk(query, mode, detailLevel);
+    const response = await searchIAsk(query, mode, detailLevel || undefined);
 
     return {
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: response || 'No results found.'
         }
       ]
@@ -60,7 +59,7 @@ export async function iaskToolHandler(params: any) {
       isError: true,
       content: [
         {
-          type: 'text',
+          type: 'text' as const,
           text: `Error searching IAsk: ${error.message}`
         }
       ]
