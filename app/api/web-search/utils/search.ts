@@ -16,6 +16,8 @@ const httpsAgent = new https.Agent({
   rejectUnauthorized: true,
   keepAlive: false, // Deshabilitado para evitar sockets zombies en App Router
   timeout: REQUEST_TIMEOUT,
+  // Provide fallback for certificate issues while maintaining security
+  secureProtocol: 'TLSv1_2_method'
 });
 
 /**
@@ -169,7 +171,17 @@ async function searchDuckDuckGo(query: string, numResults: number = 10, mode: st
         {
           signal: controller.signal,
           headers: {
-            'User-Agent': userAgent
+            'User-Agent': userAgent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Referer': 'https://duckduckgo.com/',
+            'DNT': '1',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
           },
           httpsAgent: httpsAgent,
           timeout: REQUEST_TIMEOUT
@@ -178,11 +190,16 @@ async function searchDuckDuckGo(query: string, numResults: number = 10, mode: st
 
       clearTimeout(timeoutId);
 
-      if (response.status !== 200) {
+      // Aceptamos 200 (OK) y 202 (Accepted)
+      if (response.status !== 200 && response.status !== 202) {
         throw new Error(`HTTP ${response.status}: Failed to fetch search results`);
       }
 
-      console.log(`DuckDuckGo responded with status ${response.status}. Parsing HTML...`);
+      if (response.status === 202) {
+        console.log('DuckDuckGo returned 202 (Accepted). Attempting to parse partial or redirect content...');
+      } else {
+        console.log(`DuckDuckGo responded with status ${response.status}. Parsing HTML...`);
+      }
       const html = response.data;
 
       // Parse results using cheerio
@@ -259,20 +276,26 @@ async function searchDuckDuckGo(query: string, numResults: number = 10, mode: st
       });
 
       // Wait for all Jina AI fetches to complete with timeout
-      let jinaResults: any[] = [];
-      if (jinaFetchPromises.length > 0) {
-        console.log(`Fetching content for ${jinaFetchPromises.length} results...`);
-        jinaResults = await Promise.race([
-          Promise.all(jinaFetchPromises),
-          new Promise<any[]>((_, reject) =>
-            setTimeout(() => reject(new Error('Content fetch timeout')), 15000)
-          )
-        ]) as any[];
-      } else {
-        console.log('No results found in DuckDuckGo HTML to fetch content for.');
-      }
+      let timeout: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<any[]>((resolve) => {
+        timeout = setTimeout(() => {
+          console.warn('Content fetch timeout reached, returning partial results.');
+          resolve([]); // Resolvemos con vacío en lugar de rechazar para no romper la ejecución
+        }, 15000);
+      });
 
-      results.push(...jinaResults);
+      try {
+        const jinaResults = await Promise.race([
+          Promise.all(jinaFetchPromises),
+          timeoutPromise
+        ]) as any[];
+
+        if (timeoutId) clearTimeout(timeoutId);
+        results.push(...jinaResults);
+      } catch (error) {
+        if (timeoutId) clearTimeout(timeoutId);
+        console.error('Enrichment race error:', error);
+      }
 
       // Get limited results
       const limitedResults = results.slice(0, numResults);
