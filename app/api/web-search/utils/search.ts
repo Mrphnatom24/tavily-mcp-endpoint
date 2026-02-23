@@ -2,14 +2,20 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import https from 'https';
 import { getRandomUserAgent } from '@/app/api/web-search/utils/user_agents';
+import { redisCache } from '@/app/api/web-search/utils/redis';
+import { checkRateLimit } from '@/app/api/web-search/utils/ratelimit';
 
 // Constants
-const MAX_CACHE_PAGES = 5;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-const REQUEST_TIMEOUT = 10000; // 10 seconds
+const EMPTY_CACHE_DURATION = 30 * 1000; // 30 seconds for empty results
+const REQUEST_TIMEOUT = 10000; // 15 seconds
+const JINA_DELAY_MS = 0; //800; // Delay between Jina AI requests
+const JINA_TIMEOUT_PER_RESULT = 8000; // Extra timeout per result requested
+const MAX_SEARCH_RETRIES = 1; // Number of retries for DuckDuckGo
+const MAX_DESCRIPTION_LENGTH = 4000; // Maximum length of description
+const MAXIMUM_ENRICHMENT_TIMEOUT = 15000; // Maximum enrichment timeout
+const MAX_RESULTS = 7; // Maximum number of results
 
-// Cache results to avoid repeated requests
-const resultsCache = new Map();
 
 // HTTPS agent configuration to handle certificate chain issues
 const httpsAgent = new https.Agent({
@@ -23,22 +29,12 @@ const httpsAgent = new https.Agent({
 /**
  * Generate a cache key for a search query
  * @param {string} query - The search query
+ * @param {string} mode - The search mode
+ * @param {number} numResults - Number of results
  * @returns {string} The cache key
  */
-function getCacheKey(query: string) {
-  return `${query}`;
-}
-
-/**
- * Clear old entries from the cache
- */
-function clearOldCache() {
-  const now = Date.now();
-  for (const [key, value] of resultsCache.entries()) {
-    if (now - value.timestamp > CACHE_DURATION) {
-      resultsCache.delete(key);
-    }
-  }
+function getCacheKey(query: string, mode: string, numResults: number) {
+  return `${query}:${mode}:${numResults}`;
 }
 
 /**
@@ -129,216 +125,184 @@ function getJinaAiUrl(url: string) {
  * @param {string} mode - 'short' or 'detailed' mode (default: 'short')
  * @returns {Promise<Array>} - Array of search results
  */
-async function searchDuckDuckGo(query: string, numResults: number = 10, mode: string = 'short') {
+async function searchDuckDuckGo(query: string, numResults: number = 3, mode: string = 'short') {
   try {
     // Input validation
     if (!query || typeof query !== 'string') {
       throw new Error('Invalid query: query must be a non-empty string');
     }
 
-    if (!Number.isInteger(numResults) || numResults < 1 || numResults > 20) {
-      throw new Error('Invalid numResults: must be an integer between 1 and 20');
+    if (!Number.isInteger(numResults) || numResults < 1 || numResults > MAX_RESULTS) {
+      throw new Error(`Invalid numResults: must be an integer between 1 and ${MAX_RESULTS}`);
     }
 
     if (!['short', 'detailed'].includes(mode)) {
       throw new Error('Invalid mode: must be "short" or "detailed"');
     }
 
-    // Clear old cache entries
-    clearOldCache();
+    const startTime = Date.now();
+    console.log(`[SCRAPER_LOG][START] Query: "${query}" | Mode: ${mode} | Results: ${numResults}`);
 
-    // Check cache first
-    const cacheKey = getCacheKey(query);
-    const cachedResults = resultsCache.get(cacheKey);
-
-    if (cachedResults && Date.now() - cachedResults.timestamp < CACHE_DURATION) {
-      console.log(`Cache hit for query: "${query}"`);
-      return cachedResults.results.slice(0, numResults);
+    // Rate Limiting (Prevent IP bans)
+    const isAllowed = await checkRateLimit('rl:duckduckgo', 20, 60); // 20 requests per minute
+    if (!isAllowed) {
+      console.warn(`[SCRAPER_LOG][RATELIMIT] Rate limit exceeded for DuckDuckGo. Query: "${query}"`);
+      throw new Error('Rate limit exceeded for web search. Please wait a moment.');
     }
 
-    // Get a random user agent
-    const userAgent = getRandomUserAgent();
+    // Check Redis cache first
+    const cacheKey = getCacheKey(query, mode, numResults);
+    const cachedResults = await redisCache.get<any[]>(cacheKey);
 
-    console.log(`Searching DuckDuckGo for: "${query}" (${numResults} results, mode: ${mode})`);
+    if (cachedResults) {
+      console.log(`[SCRAPER_LOG][CACHE_HIT] Query: "${query}" | Mode: ${mode}`);
+      return cachedResults;
+    }
 
-    // Fetch results with timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    let searchItems: any[] = [];
+    let retryCount = 0;
+    let html = '';
 
-    try {
-      const response = await axios.get(
-        `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
-        {
-          signal: controller.signal,
-          headers: {
-            'User-Agent': userAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3',
-            'Referer': 'https://duckduckgo.com/',
-            'DNT': '1',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-          },
-          httpsAgent: httpsAgent,
-          timeout: REQUEST_TIMEOUT
-        }
-      );
-
-      clearTimeout(timeoutId);
-
-      // Aceptamos 200 (OK) y 202 (Accepted)
-      if (response.status !== 200 && response.status !== 202) {
-        throw new Error(`HTTP ${response.status}: Failed to fetch search results`);
+    while (retryCount <= MAX_SEARCH_RETRIES && searchItems.length === 0) {
+      if (retryCount > 0) {
+        console.log(`Retry ${retryCount}/${MAX_SEARCH_RETRIES} for query: "${query}"`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
       }
 
-      if (response.status === 202) {
-        console.log('DuckDuckGo returned 202 (Accepted). Attempting to parse partial or redirect content...');
-      } else {
-        console.log(`DuckDuckGo responded with status ${response.status}. Parsing HTML...`);
-      }
-      const html = response.data;
-
-      // Parse results using cheerio
-      const $ = cheerio.load(html);
-
-      const results: any[] = [];
-      const jinaFetchPromises: Promise<any>[] = [];
-
-      $('.result').each((i, result) => {
-        const $result = $(result);
-        const titleEl = $result.find('.result__title a');
-        const linkEl = $result.find('.result__url');
-        const snippetEl = $result.find('.result__snippet');
-
-        const title = titleEl.text()?.trim();
-        const rawLink = titleEl.attr('href');
-        const description = snippetEl.text()?.trim();
-        const displayUrl = linkEl.text()?.trim();
-
-        const directLink = extractDirectUrl(rawLink || '');
-        const favicon = getFaviconUrl(directLink);
-        const jinaUrl = getJinaAiUrl(directLink);
-
-        if (title && directLink) {
-          if (mode === 'detailed') {
-            jinaFetchPromises.push(
-              axios.get(jinaUrl, {
-                headers: {
-                  'User-Agent': getRandomUserAgent()
-                },
-                httpsAgent: httpsAgent,
-                timeout: 8000
-              })
-                .then(jinaRes => {
-                  let jinaContent = '';
-                  if (jinaRes.status === 200 && typeof jinaRes.data === 'string') {
-                    const $jina = cheerio.load(jinaRes.data);
-                    jinaContent = $jina('body').text();
-                  }
-                  return {
-                    title,
-                    url: directLink,
-                    snippet: description || '',
-                    favicon: favicon,
-                    displayUrl: displayUrl || '',
-                    description: jinaContent
-                  };
-                })
-                .catch(() => {
-                  // Return fallback without content
-                  return {
-                    title,
-                    url: directLink,
-                    snippet: description || '',
-                    favicon: favicon,
-                    displayUrl: displayUrl || '',
-                    description: ''
-                  };
-                })
-            );
-          } else {
-            // short mode: omit description
-            jinaFetchPromises.push(
-              Promise.resolve({
-                title,
-                url: directLink,
-                snippet: description || '',
-                favicon: favicon,
-                displayUrl: displayUrl || ''
-              })
-            );
-          }
-        }
-      });
-
-      // Wait for all Jina AI fetches to complete with timeout
-      let timeout: NodeJS.Timeout | undefined;
-      const timeoutPromise = new Promise<any[]>((resolve) => {
-        timeout = setTimeout(() => {
-          console.warn('Content fetch timeout reached, returning partial results.');
-          resolve([]); // Resolvemos con vacío en lugar de rechazar para no romper la ejecución
-        }, 15000);
-      });
+      const userAgent = getRandomUserAgent();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
       try {
-        const jinaResults = await Promise.race([
-          Promise.all(jinaFetchPromises),
-          timeoutPromise
-        ]) as any[];
+        const response = await axios.get(
+          `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+          {
+            signal: controller.signal,
+            headers: {
+              'User-Agent': userAgent,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+              'Accept-Language': 'es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3',
+              'Referer': 'https://duckduckgo.com/',
+              'DNT': '1',
+              'Upgrade-Insecure-Requests': '1',
+              'Cache-Control': 'max-age=0',
+            },
+            httpsAgent: httpsAgent,
+            timeout: REQUEST_TIMEOUT
+          }
+        );
 
-        if (timeoutId) clearTimeout(timeoutId);
-        results.push(...jinaResults);
-      } catch (error) {
-        if (timeoutId) clearTimeout(timeoutId);
-        console.error('Enrichment race error:', error);
+        clearTimeout(timeoutId);
+
+        if (response.status === 202) {
+          console.log('DuckDuckGo returned 202 (Accepted). Search might be delayed or partial.');
+        }
+
+        html = response.data;
+        const $ = cheerio.load(html);
+
+        // Try multiple selectors
+        const resultSelectors = ['.result', '.results_links', '.web-result'];
+
+        for (const selector of resultSelectors) {
+          $(selector).each((i, result) => {
+            const $result = $(result);
+            const titleEl = $result.find('.result__title a, .rt-title a');
+            const linkEl = $result.find('.result__url, .rt-url');
+            const snippetEl = $result.find('.result__snippet, .rt-snippet');
+
+            const title = titleEl.text()?.trim();
+            const rawLink = titleEl.attr('href');
+            const description = snippetEl.text()?.trim();
+            const displayUrl = linkEl.text()?.trim();
+
+            const directLink = extractDirectUrl(rawLink || '');
+            const favicon = getFaviconUrl(directLink);
+            const jinaUrl = getJinaAiUrl(directLink);
+
+            if (title && directLink) {
+              searchItems.push({
+                title,
+                directLink,
+                description,
+                favicon,
+                displayUrl,
+                jinaUrl
+              });
+            }
+          });
+          if (searchItems.length > 0) break;
+        }
+
+        if (searchItems.length === 0) {
+          const pageTitle = $('title').text() || 'No title';
+          console.warn(`Attempt ${retryCount + 1} found 0 results. Title: "${pageTitle}". HTML length: ${html.length}`);
+        }
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        console.error(`Fetch attempt ${retryCount + 1} failed: ${fetchError.message}`);
       }
+      retryCount++;
+    }
 
-      // Get limited results
+    if (searchItems.length === 0) {
+      console.warn(`Final: No results found on DuckDuckGo for: "${query}" after ${retryCount} attempts.`);
+      await redisCache.set(cacheKey, [], EMPTY_CACHE_DURATION / 1000);
+      return [];
+    }
+
+    const results = searchItems.map(item => ({
+      title: item.title,
+      url: item.directLink,
+      snippet: item.description || '',
+      favicon: item.favicon,
+      displayUrl: item.displayUrl || '',
+      description: ''
+    }));
+
+    if (mode === 'short') {
       const limitedResults = results.slice(0, numResults);
-
-      // Cache the results
-      resultsCache.set(cacheKey, {
-        results: limitedResults,
-        timestamp: Date.now()
-      });
-
-      // If cache is too big, remove oldest entries
-      if (resultsCache.size > MAX_CACHE_PAGES) {
-        const oldestKey = Array.from(resultsCache.keys())[0];
-        resultsCache.delete(oldestKey);
-      }
-
-      console.log(`Found ${limitedResults.length} results for query: "${query}"`);
+      await redisCache.set(cacheKey, limitedResults, CACHE_DURATION / 1000);
+      console.log(`[SCRAPER_LOG][SUCCESS] Query: "${query}" | Found ${limitedResults.length} results | Time: ${Date.now() - startTime}ms`);
       return limitedResults;
-    } catch (fetchError: any) {
-      clearTimeout(timeoutId);
-
-      if (fetchError.name === 'AbortError') {
-        throw new Error('Search request timeout: took longer than 10 seconds');
-      }
-
-      if (fetchError.code === 'ENOTFOUND') {
-        throw new Error('Network error: unable to resolve host');
-      }
-
-      if (fetchError.code === 'ECONNREFUSED') {
-        throw new Error('Network error: connection refused');
-      }
-
-      throw fetchError;
     }
+
+    console.log(`[SCRAPER_LOG][ENRICH] Enriching ${results.length} results with Jina AI...`);
+    const enrichmentPromises = searchItems.map(async (item, index) => {
+      if (index > 0) {
+        await new Promise(resolve => setTimeout(resolve, index * JINA_DELAY_MS));
+      }
+      try {
+        const jinaRes = await axios.get(item.jinaUrl, {
+          headers: { 'User-Agent': getRandomUserAgent() },
+          httpsAgent: httpsAgent,
+          timeout: JINA_TIMEOUT_PER_RESULT
+        });
+        if (jinaRes.status === 200 && typeof jinaRes.data === 'string') {
+          //const $jina = cheerio.load(jinaRes.data);
+          results[index].description = jinaRes.data.slice(0, MAX_DESCRIPTION_LENGTH);
+        }
+      } catch (error: any) {
+        console.warn(`Jina enrichment failed for ${item.directLink}: ${error.message}`);
+      }
+    });
+
+    const enrichmentTimeoutMs = Math.min(MAXIMUM_ENRICHMENT_TIMEOUT, results.length * JINA_TIMEOUT_PER_RESULT);
+    await Promise.race([
+      Promise.all(enrichmentPromises),
+      new Promise(resolve => setTimeout(() => {
+        console.warn(`Enrichment global timeout reached (${enrichmentTimeoutMs}ms). Returning partial results.`);
+        resolve(null);
+      }, enrichmentTimeoutMs))
+    ]);
+
+    const limitedResults = results.slice(0, numResults);
+    await redisCache.set(cacheKey, limitedResults, CACHE_DURATION / 1000);
+
+    console.log(`[SCRAPER_LOG][SUCCESS] Query: "${query}" | Found ${limitedResults.length} enriched results | Time: ${Date.now() - startTime}ms`);
+    return limitedResults;
   } catch (error: any) {
-    console.error('Error searching DuckDuckGo:', error.message);
-
-    // Enhanced error reporting
-    if (error.message.includes('Invalid')) {
-      throw error; // Re-throw validation errors as-is
-    }
-
+    console.error(`[SCRAPER_LOG][ERROR] Query: "${query}" | Error: ${error.message}`);
     throw new Error(`Search failed for "${query}": ${error.message}`);
   }
 }

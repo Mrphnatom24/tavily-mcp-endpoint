@@ -10,7 +10,7 @@ class MonicaClient {
   private headers: Record<string, string>;
   private client: any; // Using any for axios instance to simplify for now, though AxiosInstance is better
 
-  constructor(timeout: number = 60000) {
+  constructor(timeout: number = 20000) {
     this.apiEndpoint = "https://monica.so/api/search_v1/search";
     this.timeout = timeout;
     this.clientId = randomUUID();
@@ -109,20 +109,33 @@ class MonicaClient {
 
       let fullText = '';
       let receivedData = false;
+      let buffer = ''; // Buffer to accumulate partial lines
 
       return new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
-          reject(new Error('Monica stream timeout: no response data received'));
+          if (fullText.length > 0) {
+            console.warn(`⏱️ [MONICA_LOG] Timeout reached but some data received (${fullText.length} chars). Returning partial results.`);
+            resolve(this.formatResponse(fullText));
+          } else {
+            reject(new Error('Monica stream timeout: no response data received within timeout limit'));
+          }
         }, this.timeout);
 
         response.data.on('data', (chunk: any) => {
           receivedData = true;
-          const lines = chunk.toString().split('\n');
+          buffer += chunk.toString();
+
+          let boundary = buffer.lastIndexOf('\n');
+          if (boundary === -1) return; // Wait for at least one full line
+
+          const lines = buffer.substring(0, boundary).split('\n');
+          buffer = buffer.substring(boundary + 1); // Keep the remainder for next chunk
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('data: ')) {
               try {
-                const jsonStr = line.substring(6);
+                const jsonStr = trimmedLine.substring(6);
                 const data = JSON.parse(jsonStr);
 
                 if (data.session_id) {
@@ -132,11 +145,9 @@ class MonicaClient {
                 if (data.text) {
                   fullText += data.text;
                 }
-
-                console.log('Monica data chunk received:', data.text?.substring(0, 50) + '...');
               } catch (e: any) {
-                // Ignore parse errors for non-JSON lines
-                console.debug('Ignoring non-JSON line:', line.substring(0, 50));
+                // Ignore parse errors for incomplete JSON fragments
+                console.debug('[MONICA_LOG] Ignoring malformed JSON chunk');
               }
             }
           }
@@ -145,17 +156,22 @@ class MonicaClient {
         response.data.on('end', () => {
           clearTimeout(timeoutId);
 
-          if (!receivedData) {
+          if (!receivedData && fullText.length === 0) {
             reject(new Error('Monica no data received: empty response'));
             return;
           }
 
-          console.log('Monica stream completed, total length:', fullText.length);
+          console.log(`[MONICA_LOG] Stream completed, total raw length: ${fullText.length}`);
 
           const formatted = this.formatResponse(fullText);
 
           if (!formatted || formatted.trim() === '') {
-            reject(new Error('Monica no valid content: received empty or invalid response'));
+            // If we have some raw text but formatting failed or it's just whitespace
+            if (fullText.length > 0) {
+              resolve(fullText.trim());
+            } else {
+              reject(new Error('Monica no valid content: received empty or invalid response'));
+            }
             return;
           }
 
@@ -164,7 +180,13 @@ class MonicaClient {
 
         response.data.on('error', (err: any) => {
           clearTimeout(timeoutId);
-          console.error('Monica stream error:', err.message);
+          console.error('[MONICA_LOG] Stream error:', err.message);
+
+          if (fullText.length > 0) {
+            console.warn('[MONICA_LOG] Error occurred but returning partial data received so far.');
+            resolve(this.formatResponse(fullText));
+            return;
+          }
 
           if (err.code === 'ENOTFOUND') {
             reject(new Error('Monica network error: unable to resolve host'));

@@ -5,6 +5,7 @@ import TurndownService from 'turndown';
 import * as tough from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
 import { getRandomUserAgent } from '@/app/api/web-search/utils/user_agents';
+import { redisCache } from '@/app/api/web-search/utils/redis';
 
 const { CookieJar } = tough;
 
@@ -12,11 +13,9 @@ const { CookieJar } = tough;
 const VALID_MODES = ['question', 'academic', 'forums', 'wiki', 'thinking'] as const;
 const VALID_DETAIL_LEVELS = ['concise', 'detailed', 'comprehensive'] as const;
 
-// Cache results to avoid repeated requests
-const resultsCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-
-const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_RESPONSE_TIMEOUT = 20000;
+const DEFAULT_CONNECTION_TIMEOUT = 6000;
 const API_ENDPOINT = 'https://iask.ai/';
 
 /**
@@ -28,18 +27,6 @@ const API_ENDPOINT = 'https://iask.ai/';
  */
 function getCacheKey(query: string, mode: string, detailLevel: string | null) {
   return `iask-${mode}-${detailLevel || 'default'}-${query}`;
-}
-
-/**
- * Clear old entries from the cache
- */
-function clearOldCache() {
-  const now = Date.now();
-  for (const [key, value] of resultsCache.entries()) {
-    if (now - value.timestamp > CACHE_DURATION) {
-      resultsCache.delete(key);
-    }
-  }
 }
 
 /**
@@ -114,7 +101,7 @@ function formatHtml(htmlContent: string) {
  * @param {string|null} detailLevel - Detail level: 'concise', 'detailed', 'comprehensive'
  * @returns {Promise<string>} The search results
  */
-async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel: string | null = null) {
+async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel: string | null = null): Promise<string> {
   // Input validation
   if (!prompt || typeof prompt !== 'string') {
     throw new Error('Invalid prompt: prompt must be a non-empty string');
@@ -130,17 +117,15 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
     throw new Error(`Invalid detail level: ${detailLevel}. Valid levels are: ${VALID_DETAIL_LEVELS.join(', ')}`);
   }
 
-  console.log(`IAsk search starting: "${prompt}" (mode: ${mode}, detailLevel: ${detailLevel || 'default'})`);
-
-  // Clear old cache entries
-  clearOldCache();
+  const startTime = Date.now();
+  console.log(`[IASK_LOG][START] Prompt: "${prompt.substring(0, 50)}..." | Mode: ${mode} | Detail: ${detailLevel || 'default'}`);
 
   const cacheKey = getCacheKey(prompt, mode, detailLevel);
-  const cachedResults = resultsCache.get(cacheKey);
+  const cachedResults = await redisCache.get<string>(cacheKey);
 
-  if (cachedResults && Date.now() - cachedResults.timestamp < CACHE_DURATION) {
-    console.log(`Cache hit for IAsk query: "${prompt}"`);
-    return cachedResults.results;
+  if (cachedResults) {
+    console.log(`[IASK_LOG][CACHE_HIT] Prompt: "${prompt.substring(0, 50)}..."`);
+    return cachedResults;
   }
 
   // Build URL parameters
@@ -158,7 +143,7 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
     console.log('Fetching IAsk AI initial page...');
     const response = await client.get(API_ENDPOINT, {
       params: Object.fromEntries(params),
-      timeout: DEFAULT_TIMEOUT,
+      timeout: DEFAULT_RESPONSE_TIMEOUT,
       headers: {
         'User-Agent': getRandomUserAgent()
       }
@@ -189,7 +174,7 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
     });
     const wsUrl = `wss://iask.ai/live/websocket?${wsParams.toString()}`;
 
-    return new Promise((resolve, reject) => {
+    return new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(wsUrl, {
         headers: {
           'Cookie': cookieString,
@@ -206,7 +191,7 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
       connectionTimeoutId = setTimeout(() => {
         ws.close();
         reject(new Error('IAsk connection timeout: unable to establish WebSocket connection'));
-      }, 15000);
+      }, DEFAULT_CONNECTION_TIMEOUT);
 
       ws.on('open', () => {
         clearTimeout(connectionTimeoutId);
@@ -233,7 +218,7 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
           } else {
             reject(new Error('IAsk response timeout: no response received'));
           }
-        }, DEFAULT_TIMEOUT);
+        }, DEFAULT_RESPONSE_TIMEOUT);
       });
 
       ws.on('message', (data) => {
@@ -285,18 +270,15 @@ async function searchIAsk(prompt: string, mode: string = 'thinking', detailLevel
         }
       });
 
-      ws.on('close', () => {
+      ws.on('close', async () => {
         clearTimeout(timeoutId);
         clearTimeout(connectionTimeoutId);
 
-        console.log(`IAsk search completed: ${buffer.length} characters received`);
+        console.log(`[IASK_LOG][SUCCESS] Search completed: ${buffer.length} characters in ${Date.now() - startTime}ms`);
 
         // Cache the result
         if (buffer) {
-          resultsCache.set(cacheKey, {
-            results: buffer,
-            timestamp: Date.now()
-          });
+          await redisCache.set(cacheKey, buffer, CACHE_DURATION / 1000);
         }
 
         resolve(buffer || 'No results found.');

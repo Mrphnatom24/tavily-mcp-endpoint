@@ -24,7 +24,7 @@ export const monicaToolDefinition = {
  * Monica AI search tool handler
  * @param {z.infer<typeof MonicaToolSchema>} params - The tool parameters
  */
-export async function monicaToolHandler(params: z.infer<typeof MonicaToolSchema>) {
+export async function monicaToolHandler(params: z.infer<typeof MonicaToolSchema>): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
   const { query } = params;
 
   console.log(`Searching Monica AI for: "${query}"`);

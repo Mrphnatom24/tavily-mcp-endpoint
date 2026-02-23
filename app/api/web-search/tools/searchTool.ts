@@ -9,7 +9,7 @@ export const SearchToolSchema = z.object({
   numResults: z.number().int()
     .optional()
     .default(3)
-    .describe('Specify how many results to display (default: 3, maximum: 20).'),
+    .describe('Specify how many results to display (default: 3, maximum: 7).'),
 
   mode: z.enum(['short', 'detailed'])
     .optional()
@@ -31,7 +31,7 @@ export const searchToolDefinition = {
  * @param {z.infer<typeof SearchToolSchema>} params - The tool parameters
  * @returns {Promise<Object>} - The tool response
  */
-export async function searchToolHandler(params: z.infer<typeof SearchToolSchema>) {
+export async function searchToolHandler(params: z.infer<typeof SearchToolSchema>): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
   const { query, numResults = 3, mode = 'short' } = params;
   console.log(`Searching for: ${query} (${numResults} results, mode: ${mode})`);
 

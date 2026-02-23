@@ -12,7 +12,7 @@ export const IAskToolSchema = z.object({
     .describe('Search mode: "question", "academic", "forums", "wiki", or "thinking".'),
 
   detailLevel: z.enum(VALID_DETAIL_LEVELS)
-    .optional()
+    .optional().default('concise')
     .describe('Level of detail: "concise", "detailed", or "comprehensive".')
 });
 
@@ -33,17 +33,17 @@ export const iaskToolDefinition = {
  * IAsk AI search tool handler
  * @param {z.infer<typeof IAskToolSchema>} params - The tool parameters
  */
-export async function iaskToolHandler(params: z.infer<typeof IAskToolSchema>) {
+export async function iaskToolHandler(params: z.infer<typeof IAskToolSchema>): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
   const {
     query,
     mode = 'thinking',
-    detailLevel = undefined
+    detailLevel = 'concise'
   } = params;
 
   console.log(`Searching IAsk AI for: "${query}" (mode: ${mode}, detailLevel: ${detailLevel || 'default'})`);
 
   try {
-    const response = await searchIAsk(query, mode, detailLevel || undefined);
+    const response: string = await searchIAsk(query, mode, detailLevel || undefined);
 
     return {
       content: [

@@ -1,3 +1,4 @@
+// app/api/web-search/[transport]/route.ts
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 
@@ -41,7 +42,7 @@ const handler = createMcpHandler(
   },
   {
     basePath: "/api/web-search",
-    maxDuration: 60,
+    maxDuration: 30,  // Worst-case scenario
     verboseLogs: true,
     redisUrl: process.env.REDIS_URL,
   }
