@@ -1,4 +1,6 @@
 import { tavily } from "@tavily/core";
+import { redisCache } from '@/app/api/web-search/utils/redis';
+import { checkRateLimit } from '@/app/api/web-search/utils/ratelimit';
 
 // Initialize the client (Make sure you have the environment variable in Vercel)
 const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
