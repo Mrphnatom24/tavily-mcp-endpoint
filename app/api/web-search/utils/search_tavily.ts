@@ -1,11 +1,11 @@
 import { tavily } from "@tavily/core";
 
-// Inicializar el cliente (Asegúrate de tener la variable de entorno en Vercel)
+// Initialize the client (Make sure you have the environment variable in Vercel)
 const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
 
 export const tavilySearchHandler = async ({ query, searchDepth = "basic" }: { query: string, searchDepth?: "basic" | "advanced" }) => {
     try {
-        // Ejecutar la búsqueda
+        // Execute the search
         const response = await tvly.search(query, {
             searchDepth: searchDepth,
             maxResults: 5,
@@ -17,7 +17,7 @@ export const tavilySearchHandler = async ({ query, searchDepth = "basic" }: { qu
             };
         }
 
-        // Formatear los resultados para el LLM
+        // Format the results for the LLM
         const formattedResults = response.results
             .map((r: any) => `Título: ${r.title}\nURL: ${r.url}\nContenido: ${r.content}\n---`)
             .join("\n");
