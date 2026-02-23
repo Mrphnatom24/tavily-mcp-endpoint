@@ -4,6 +4,7 @@
 import { createMcpHandler } from "mcp-handler";
 import { tavilyToolDefinition, tavilyToolHandler } from '@/app/api/web-search/tools/tavilyTool';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 
 export const maxDuration = 30; // Incrementa a 60 si es necesario y tienes plan Pro
 export const dynamic = 'force-dynamic'; // Obligatorio para evitar que Next.js cachee el stream de SSE
@@ -12,6 +13,21 @@ export const runtime = 'nodejs'; // Recomendado para mayor compatibilidad con SD
 const handler = createMcpHandler(
   (server: McpServer) => {
     // Register tools
+    server.registerTool(
+      "saludar",
+      {
+        title: "Saludar",
+        description: "Saluda a la persona que te habla.",
+        inputSchema: {
+          nombre: z.string(),
+        },
+      },
+      async ({ nombre }: { nombre: string }) => {
+        return {
+          content: [{ type: "text", text: `Hola ${nombre}!` }],
+        };
+      }
+    );
     server.registerTool("tavily-search", tavilyToolDefinition, tavilyToolHandler);
   },
   // Provide server information (required by some clients)
