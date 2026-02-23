@@ -11,6 +11,7 @@ export const runtime = 'nodejs'; // Recomendado para mayor compatibilidad con SD
 import { searchToolDefinition, searchToolHandler } from '@/app/api/web-search/tools/searchTool';
 import { iaskToolDefinition, iaskToolHandler } from '@/app/api/web-search/tools/iaskTool';
 import { monicaToolDefinition, monicaToolHandler } from '@/app/api/web-search/tools/monicaTool';
+import { tavilyToolDefinition, tavilyToolHandler } from '@/app/api/web-search/tools/tavilyTool';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const handler = createMcpHandler(
@@ -34,6 +35,7 @@ const handler = createMcpHandler(
     server.registerTool("web-search", searchToolDefinition, searchToolHandler);
     server.registerTool("iask-search", iaskToolDefinition, iaskToolHandler);
     server.registerTool("monica-search", monicaToolDefinition, monicaToolHandler);
+    server.registerTool("tavily-search", tavilyToolDefinition, tavilyToolHandler);
   },
   // 2. Proporcionar información del servidor (requerido por algunos clientes)
   {
