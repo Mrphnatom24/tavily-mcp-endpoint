@@ -55,7 +55,8 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, x-mcp-protocol-version',
+      'Access-Control-Allow-Headers': 'Content-Type, x-mcp-protocol-version, x-mcp-session-id',
+      'X-Accel-Buffering': 'no',
     },
   });
 }
