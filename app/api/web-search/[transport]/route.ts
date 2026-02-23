@@ -2,8 +2,10 @@
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 
-// 1. Obligatorio para evitar que Next.js cachee el stream de SSE
-export const dynamic = 'force-dynamic';
+
+export const maxDuration = 30; // Incrementa a 60 si es necesario y tienes plan Pro
+export const dynamic = 'force-dynamic'; // Obligatorio para evitar que Next.js cachee el stream de SSE
+export const runtime = 'nodejs'; // Recomendado para mayor compatibilidad con SDKs
 
 // Import tool definitions and handlers
 import { searchToolDefinition, searchToolHandler } from '@/app/api/web-search/tools/searchTool';
