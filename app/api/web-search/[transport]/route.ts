@@ -28,6 +28,8 @@ const handler = createMcpHandler(
         };
       }
     );
+
+
     server.registerTool("tavily-search", tavilyToolDefinition, tavilyToolHandler);
   },
   // Provide server information (required by some clients)
